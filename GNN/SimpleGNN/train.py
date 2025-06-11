@@ -1,8 +1,6 @@
-
-import torch
 from torch.utils.data import DataLoader
-from GNS import *
-from Dataset import *
+from GNN.SimpleGNN.GNS import *
+from GNN.SimpleGNN.Dataset import *
 
 # Automatically select GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -14,7 +12,7 @@ optim = torch.optim.Adam(model.parameters(), lr=1e-3)
 loss_f = nn.MSELoss()
 
 # Load dataset and dataloader
-dataset = ChanghunDataset("Changhun_multi.parquet")
+dataset = ChanghunDataset("data/60_variations_4_8_16_32_bus_grid.parquet.parquet")
 train_loader = DataLoader(dataset, batch_size=1, shuffle=True)
 # loaders = {N: DataLoader(dsN[N], batch_size=32, shuffle=True) for N in [4,8,16,32]}
 

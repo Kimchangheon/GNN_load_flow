@@ -25,18 +25,6 @@ class BusEmbedding(nn.Module):
         out[mask3] = self.load (feat[mask3])
         return out
 
-
-class Leap(nn.Module):
-    """One message-passing block with residual."""
-    def __init__(self, d):
-        super().__init__()
-        self.lin = nn.Linear(d, d)
-
-    def forward(self, H, A):
-        H_neigh = torch.matmul(A, H)          # (N×N)(N×d)→(N×d)
-        return H + torch.tanh(self.lin(H_neigh))
-
-
 class Decoder(nn.Module):
     """d → Δ|V|, Δδ"""
     def __init__(self, d):
@@ -48,21 +36,36 @@ class Decoder(nn.Module):
 
 
 class GNSSolver(nn.Module):
-    def __init__(self, d=100, K=10):
+    def __init__(self, pinn_flag=False, adj_mode="default", d=100, K=10):
         super().__init__()
+        self.pinn_flag = pinn_flag
+        self.adj_mode = adj_mode
         self.K  = K
         self.emb = BusEmbedding(d)
-        self.leap = Leap(d)          # weight shared across K steps
+        if adj_mode == "sep":
+            self.leap_lin = nn.Linear(2*d, d)
+        else : # mag, cplx, default
+            if adj_mode == "cplx":
+                assert d % 2 == 0, "d must be even for complex mode"
+            self.leap_lin = nn.Linear(d, d)
         self.dec  = Decoder(d)
 
+    # ----------------------------------------
+    # helper: AC power-flow equations
+    # ----------------------------------------
     @staticmethod
-    def _build_adjacency(Yr, Yi):
-        """dense binary adjacency from real+imag parts"""
-        A = ((Yr != 0) | (Yi != 0)).float()
-        A.fill_diagonal_(0)
-        # row-normalise (optional)
-        deg = A.sum(-1, keepdim=True).clamp_min(1.0)
-        return A / deg
+    def calc_PQ(Yr, Yi, Vmag, Vang):
+        """
+        Yr,Yi : (B,N,N) real / imag of Ybus (with diagonals!)
+        Vmag  : (B,N)
+        Vang  : (B,N)  radians
+        returns P,Q  (B,N)
+        """
+        # build complex voltage vector V = |V| e^{jθ}
+        V = Vmag * torch.exp(1j * Vang)
+        I = torch.matmul(Yr + 1j * Yi, V.unsqueeze(-1)).squeeze(-1)  # Y·V
+        S = V * I.conj()  # complex power
+        return S.real, S.imag  # P,Q
 
     def forward(self,
                 bus_type,  # (B,N)
@@ -115,23 +118,59 @@ class GNSSolver(nn.Module):
         # ------------------------------------------------------------------
         # 4. Build adjacency per sample  A (B,N,N)  row-normalised
         # ------------------------------------------------------------------
-        A = ((Yr != 0) | (Yi != 0)).float()
-        idx = torch.arange(N, device=A.device)
-        A[:, idx, idx] = 0.0
-        deg = A.sum(-1, keepdim=True).clamp_min(1.0)
-        A = A / deg  # (B,N,N)
+        if self.adj_mode == "default": # simple adjacney
+            A = ((Yr != 0) | (Yi != 0)).float()
+            idx = torch.arange(N, device=A.device)
+            A[:, idx, idx] = 0.0
+            deg = A.sum(-1, keepdim=True).clamp_min(1.0)
+            A = A / deg  # (B,N,N)
+        elif self.adj_mode == "mag": # 1. Magnitude-only weight
+            # ----- build Y-weighted row-normalised matrix --------------------------
+            # Yr,Yi : (B,N,N)
+            weight = torch.sqrt(Yr.pow(2) + Yi.pow(2))  # |Y|  (B,N,N)
+            weight.diagonal(dim1=-2, dim2=-1).zero_()  # no self-loops
 
-        # ------------------------------------------------------------------
+            deg = weight.sum(-1, keepdim=True).clamp_min(1e-6)
+            A = weight / deg
+        elif self.adj_mode == "sep": # 2. Signed real / imag channels
+            G = Yr.clamp(min=0.0)  # take positive part
+            B = Yi.abs()
+            G.diagonal(dim1=-2, dim2=-1).zero_()
+            B.diagonal(dim1=-2, dim2=-1).zero_()
+
+            Ag = G / G.sum(-1, keepdim=True).clamp_min(1e-6)
+            Ab = B / B.sum(-1, keepdim=True).clamp_min(1e-6)
+        elif self.adj_mode == "cplx":
+            d_half = H.size(-1) // 2
+            G = Yr                                           # conductance
+            B = Yi                                           # susceptance
+            G.diagonal(dim1=-2, dim2=-1).zero_()
+            B.diagonal(dim1=-2, dim2=-1).zero_()
         # 5. Voltage iteration
         # ------------------------------------------------------------------
         Vmag = V_start[..., 0]  # (B,N)
         Vang = V_start[..., 1]  # (B,N)
         d = H.size(-1)
 
-        for _ in range(self.K):
+        if self.pinn_flag:
+            gamma = 0.9  # discount factor  (hyper-param)
+            total_loss = torch.zeros(1, device=device)
+
+
+        for k in range(self.K):
             # message passing:   H ← H + tanh( A @ H  *W + b )
-            H_neigh = torch.matmul(A, H)  # (B,N,d)
-            H = H + torch.tanh(self.leap.lin(H_neigh))  # residual
+            if self.adj_mode =="sep" :
+                H_g = torch.matmul(Ag, H)
+                H_b = torch.matmul(Ab, H)
+                H_neigh = torch.cat([H_g, H_b], dim=-1)  # (B,N,2d)
+            elif self.adj_mode == "cplx":
+                H_r, H_i = H[..., :d_half], H[..., d_half:]
+                Hr = torch.matmul(G, H_r) - torch.matmul(B, H_i)
+                Hi = torch.matmul(G, H_i) + torch.matmul(B, H_r)
+                H_neigh = torch.cat([Hr, Hi], dim=-1)          # (B,N,d)
+            else :
+                H_neigh = torch.matmul(A, H)  # (B,N,d)
+            H = H + torch.tanh(self.leap_lin(H_neigh))  # residual
 
             dV = self.dec.head(H)  # (B,N,2)
             dVm, dVa = dV[..., 0], dV[..., 1]
@@ -144,8 +183,19 @@ class GNSSolver(nn.Module):
             Vmag = Vmag + dVm
             Vang = Vang + dVa
 
+            if self.pinn_flag :
+                # ---- compute mismatch loss at this step -------------
+                P_calc, Q_calc = self.calc_PQ(Yr, Yi, Vmag, Vang)  # (B,N)
+                dP = P_spec - P_calc
+                dQ = Q_spec - Q_calc
+                step_loss = (dP ** 2 + dQ ** 2).mean() * (gamma ** (self.K - 1 - k))
+                total_loss = total_loss + step_loss
+
         V_pred = torch.stack([Vmag, Vang], dim=-1)  # (B,N,2)
-        return V_pred
+        if self.pinn_flag :
+            return V_pred, total_loss
+        else :
+            return V_pred
 
     # def forward(self, bus_type, Yr, Yi, P_spec, Q_spec,
     #             V_start=None):

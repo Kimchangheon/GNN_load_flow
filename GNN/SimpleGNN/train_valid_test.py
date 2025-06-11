@@ -1,16 +1,23 @@
 import torch
 from torch.utils.data import DataLoader, random_split
-from GNS import GNSSolver
-from Dataset import ChanghunDataset
+from GNN.SimpleGNN.GNS import GNSSolver
+from GNN.SimpleGNN.Dataset import ChanghunDataset
+from helper import *
+from collate_blockdiag import *
+import os
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # ------------------------------------------------------------------
 # 0.  Hyper-parameters
 # ------------------------------------------------------------------
-BATCH     =  32
+RUNNAME = "BLOCK_20M"
+BLOCK_DIAG =False
+BATCH     =  16
 EPOCHS    = 100
 LR        = 1e-3
 VAL_EVERY = 1        # epochs
-PARQUET   = "Changhun_multi.parquet"
+PARQUET   = "212100_variations_4_8_16_32_bus_grid.parquet"
 
 # ------------------------------------------------------------------
 # 1.  Device
@@ -32,9 +39,43 @@ train_ds, val_ds, test_ds = random_split(
         lengths=[n_train, n_val, n_test],
         generator=torch.Generator().manual_seed(42))   # reproducible split
 
-train_loader = DataLoader(train_ds, batch_size=BATCH, shuffle=True)
-val_loader   = DataLoader(val_ds,   batch_size=BATCH, shuffle=False)
-test_loader  = DataLoader(test_ds,  batch_size=BATCH, shuffle=False)
+
+if BATCH ==1 :
+    train_loader = DataLoader(train_ds, batch_size=BATCH, shuffle=True)
+    val_loader   = DataLoader(val_ds,   batch_size=BATCH, shuffle=False)
+    test_loader  = DataLoader(test_ds,  batch_size=BATCH, shuffle=False)
+else :
+    if BLOCK_DIAG :
+        train_loader = DataLoader(train_ds, batch_size=BATCH, shuffle=True,collate_fn=collate_blockdiag)
+        val_loader = DataLoader(val_ds, batch_size=BATCH, shuffle=False,collate_fn=collate_blockdiag)
+        test_loader = DataLoader(test_ds, batch_size=BATCH, shuffle=False,collate_fn=collate_blockdiag)
+    else :
+        sizes = [full_ds[i]["N"] for i in range(len(full_ds))]  # list of ints
+        # train_loader = make_size_bucketing_loader(train_ds, BATCH, shuffle=True)
+        # val_loader   = make_size_bucketing_loader(val_ds,   BATCH, shuffle=False)
+        # test_loader  = make_size_bucketing_loader(test_ds,  BATCH, shuffle=False)
+
+        # build bucketed loaders
+        train_sampler = MultiBucketBatchSampler(
+            sizes=np.take(sizes, train_ds.indices),
+            batch_size=BATCH,
+            shuffle=True)
+
+        val_sampler = MultiBucketBatchSampler(
+            sizes=np.take(sizes, val_ds.indices),
+            batch_size=BATCH,
+            shuffle=False)
+
+        test_sampler = MultiBucketBatchSampler(
+            sizes=np.take(sizes, test_ds.indices),
+            batch_size=BATCH,
+            shuffle=False)
+        train_loader = DataLoader(train_ds, batch_sampler=train_sampler)
+        val_loader = DataLoader(val_ds, batch_sampler=val_sampler)
+        test_loader = DataLoader(test_ds, batch_sampler=test_sampler)
+
+
+
 
 print(f"Dataset sizes  |  train {n_train}   valid {n_val}   test {n_test}")
 
@@ -80,6 +121,8 @@ def run_epoch(loader, train=True):
 # ------------------------------------------------------------------
 train_hist, val_hist = [], []
 
+best_val_mse = float('inf')  # Initialize best validation MSE to a very high value
+
 for epoch in range(1, EPOCHS + 1):
     train_mse = run_epoch(train_loader, train=True)
     train_hist.append(train_mse)
@@ -89,6 +132,13 @@ for epoch in range(1, EPOCHS + 1):
         val_hist.append(val_mse)
         print(f"Epoch {epoch:3d} | train MSE {train_mse:.4e} | "
               f"valid MSE {val_mse:.4e}")
+
+        if val_mse < best_val_mse:
+            best_val_mse = val_mse
+            # Save model checkpoint
+            torch.save(model.state_dict(), RUNNAME+"_"+str(EPOCHS)+"_best_model.ckpt")
+            print("Checkpoint saved.")
+
     else:
         print(f"Epoch {epoch:3d} | train MSE {train_mse:.4e}")
 
@@ -105,7 +155,7 @@ plt.title("Training / Validation loss")
 plt.legend()
 plt.tight_layout()
 
-plt.savefig("loss_curve.png")   # saved next to the script
+plt.savefig("loss_curve_block_diagonal_batching.png")   # saved next to the script
 plt.show()
 
 # ------------------------------------------------------------------

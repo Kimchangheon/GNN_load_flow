@@ -64,13 +64,23 @@ class ChanghunDataset(Dataset):
             Y[t,f] -= ys
         Yr, Yi = Y.real.astype(np.float32), Y.imag.astype(np.float32)
 
-        # ------------- specified P,Q -----------------
+        # ------------- strat P,Q -----------------
         S_start = _merge_complex(r["S_start_real"], r["S_start_imag"])
-        U_base = r["U_base"]
+        P_start = S_start.real.astype(np.float32)
+        Q_start = S_start.imag.astype(np.float32)
 
+        # ------------- specified P,Q -----------------
         S_spec = _merge_complex(r["S_newton_real"], r["S_newton_imag"])
         P_spec = S_spec.real.astype(np.float32)
         Q_spec = S_spec.imag.astype(np.float32)
+
+        # ------------- start voltages ---------
+        U_base = r["U_base"]
+        U_start = _merge_complex(r["u_start_real"],
+                                r["u_start_imag"]) / U_base
+        V_start_mag  = np.abs(U_start).astype(np.float32)
+        V_start_ang  = np.angle(U_start).astype(np.float32)
+        V_start = np.stack([V_start_mag, V_start_ang], axis=1)   # (N,2)
 
         # ------------- ground-truth voltages ---------
         U_true = _merge_complex(r["u_newton_real"],
@@ -84,9 +94,14 @@ class ChanghunDataset(Dataset):
             "bus_type":  torch.from_numpy(bus_type),
             "Ybus_real": torch.from_numpy(Yr),
             "Ybus_imag": torch.from_numpy(Yi),
+            "P_start": torch.from_numpy(P_start),
+            "Q_start": torch.from_numpy(Q_start),
             "P_spec":    torch.from_numpy(P_spec),
             "Q_spec":    torch.from_numpy(Q_spec),
-            "V_true":    torch.from_numpy(V_true)
+            "V_start": torch.from_numpy(V_start),
+            "V_true":    torch.from_numpy(V_true),
+            "N": N  # ← number of buses(expose size for bucketing)
+
         }
         return sample
 
