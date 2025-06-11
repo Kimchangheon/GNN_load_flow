@@ -100,11 +100,12 @@ def run_epoch(loader, train=True):
             bus_type = batch["bus_type"].to(device)
             Yr       = batch["Ybus_real"].to(device)
             Yi       = batch["Ybus_imag"].to(device)
-            Pspec    = batch["P_spec"].to(device)
-            Qspec    = batch["Q_spec"].to(device)
+            Pstart    = batch["P_start"].to(device)
+            Qstart    = batch["Q_start"].to(device)
+            Vstart    = batch["V_start"].to(device)
             Vtrue    = batch["V_true"].to(device)
 
-            Vpred = model(bus_type, Yr, Yi, Pspec, Qspec)
+            Vpred = model(bus_type, Yr, Yi, Pstart, Qstart, Vstart)
             loss  = loss_f(Vpred, Vtrue)
 
             if train:

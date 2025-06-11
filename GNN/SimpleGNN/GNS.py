@@ -26,7 +26,7 @@ class BusEmbedding(nn.Module):
         return out
 
 class Decoder(nn.Module):
-    """d → Δ|V|, Δδ"""
+    """d → ΔV, Δδ"""
     def __init__(self, d):
         super().__init__()
         self.head = nn.Linear(d, 2)
@@ -54,15 +54,15 @@ class GNSSolver(nn.Module):
     # helper: AC power-flow equations
     # ----------------------------------------
     @staticmethod
-    def calc_PQ(Yr, Yi, Vmag, Vang):
+    def calc_PQ(Yr, Yi, Vreal, Vang):
         """
         Yr,Yi : (B,N,N) real / imag of Ybus (with diagonals!)
         Vmag  : (B,N)
         Vang  : (B,N)  radians
         returns P,Q  (B,N)
         """
-        # build complex voltage vector V = |V| e^{jθ}
-        V = Vmag * torch.exp(1j * Vang)
+        # build complex voltage vector V = V e^{jθ}
+        V = Vreal * torch.exp(1j * Vang)
         I = torch.matmul(Yr + 1j * Yi, V.unsqueeze(-1)).squeeze(-1)  # Y·V
         S = V * I.conj()  # complex power
         return S.real, S.imag  # P,Q
@@ -73,7 +73,7 @@ class GNSSolver(nn.Module):
                 P_spec, Q_spec,  # (B,N)
                 V_start=None):  # (B,N,2) or None
         """
-        Returns: V_pred  (B, N, 2)  →  [|V| , δ]
+        Returns: V_pred  (B, N, 2)  →  [V , δ]
         """
         B, N = bus_type.shape
         device = bus_type.device
@@ -82,7 +82,7 @@ class GNSSolver(nn.Module):
         # 1. initialise / flat start: V_start (B,N,2)
         # ------------------------------------------------------------------
         if V_start is None:
-            # flat  |V|=1, δ=0
+            # flat  V=1, δ=0
             V_start = torch.zeros(B, N, 2, device=device)
             V_start[..., 0] = 1.0
             # slack magnitude = 1.06
@@ -94,10 +94,10 @@ class GNSSolver(nn.Module):
         # ------------------------------------------------------------------
         feats = torch.zeros(B, N, 2, device=device)
 
-        # slack: [ |V| , δ ]
+        # slack: [ V , δ ]
         feats[bus_type == 1] = V_start[bus_type == 1]
 
-        # PV: [ P_spec , |V|_set ]
+        # PV: [ P_spec , V_set ]
         pv_mask = (bus_type == 2)
         feats[..., 0][pv_mask] = P_spec[pv_mask]  # correct
         feats[..., 1][pv_mask] = V_start[..., 0][pv_mask]  # correct
@@ -146,9 +146,10 @@ class GNSSolver(nn.Module):
             B = Yi                                           # susceptance
             G.diagonal(dim1=-2, dim2=-1).zero_()
             B.diagonal(dim1=-2, dim2=-1).zero_()
+
         # 5. Voltage iteration
-        # ------------------------------------------------------------------
-        Vmag = V_start[..., 0]  # (B,N)
+        #------------------------------------------------------------------
+        Vreal = V_start[..., 0]  # (B,N)
         Vang = V_start[..., 1]  # (B,N)
         d = H.size(-1)
 
@@ -173,25 +174,25 @@ class GNSSolver(nn.Module):
             H = H + torch.tanh(self.leap_lin(H_neigh))  # residual
 
             dV = self.dec.head(H)  # (B,N,2)
-            dVm, dVa = dV[..., 0], dV[..., 1]
+            dVr, dVa = dV[..., 0], dV[..., 1]
 
             # apply bus-type masks
-            dVm[bus_type != 3] = 0.  # only PQ adjusts |V|
+            dVr[bus_type != 3] = 0.  # only PQ adjusts V
             dVa[bus_type == 1] = 0.  # slack angle fixed
 
             # update polar voltages
-            Vmag = Vmag + dVm
+            Vreal = Vreal + dVr
             Vang = Vang + dVa
 
             if self.pinn_flag :
                 # ---- compute mismatch loss at this step -------------
-                P_calc, Q_calc = self.calc_PQ(Yr, Yi, Vmag, Vang)  # (B,N)
+                P_calc, Q_calc = self.calc_PQ(Yr, Yi, Vreal, Vang)  # (B,N)
                 dP = P_spec - P_calc
                 dQ = Q_spec - Q_calc
                 step_loss = (dP ** 2 + dQ ** 2).mean() * (gamma ** (self.K - 1 - k))
                 total_loss = total_loss + step_loss
 
-        V_pred = torch.stack([Vmag, Vang], dim=-1)  # (B,N,2)
+        V_pred = torch.stack([Vreal, Vang], dim=-1)  # (B,N,2)
         if self.pinn_flag :
             return V_pred, total_loss
         else :
@@ -202,17 +203,17 @@ class GNSSolver(nn.Module):
     #     """
     #     bus_type : (N,)
     #     Yr,Yi    : (N,N)  real / imag of Y-bus
-    #     V_start  : optional (N,2) initial [|V|, δ]  (default flat)
-    #     returns  : predicted (N,2)  [|V|, δ]
+    #     V_start  : optional (N,2) initial [V, δ]  (default flat)
+    #     returns  : predicted (N,2)  [V, δ]
     #     """
     #     N = bus_type.numel()
     #     device = bus_type.device
     #     if V_start is None:
-    #         V_start = torch.cat([torch.ones(N,1,device=device),   # |V|=1 p.u.
+    #         V_start = torch.cat([torch.ones(N,1,device=device),   # V=1 p.u.
     #                              torch.zeros(N,1,device=device)],1)
-    #         V_start[bus_type==1,0] = 1.06       # slack |V|
+    #         V_start[bus_type==1,0] = 1.06       # slack V
     #     # --- build input features ---------------------------------
-    #     # slack:   (|V|,δ) ; PV: (P,|V|set) ; PQ: (P,Q)
+    #     # slack:   (V,δ) ; PV: (P,Vset) ; PQ: (P,Q)
     #     feats = torch.zeros(N,2,device=device)
     #     feats[bus_type==1] = V_start[bus_type==1]
     #     feats[bus_type==2,0] = P_spec[bus_type==2]
@@ -232,7 +233,7 @@ class GNSSolver(nn.Module):
     #         dVm, dVa = dV[:,0], dV[:,1]
     #
     #         # Mask per bus type
-    #         dVm[bus_type != 3] = 0.0            # only PQ can adjust |V|
+    #         dVm[bus_type != 3] = 0.0            # only PQ can adjust V
     #         dVa[bus_type == 1] = 0.0            # slack angle fixed
     #
     #         # Update polar voltages
