@@ -88,7 +88,11 @@ def VoltageCalculation3p(bus_typ, JMatrix, Y_admittance, U, P, Q):
         mag   = np.abs(U[k+1]) + deltaU_red[k+N-1]       # |V| + Δ|V|
         angle = np.angle(U[k+1]) + deltaU_red[k]         # θ + Δθ
         U[k+1] = mag * np.exp(1j * angle)
-
+        # why np.abs?
+        # for example 2+2j = V = Vm *e^jθ = Vm*cosθ + j*Vm*sinθ
+        # (2+2j)(2-2j) = (Vm*cosθ + j*Vm*sinθ)(Vm*cosθ + j*Vm*sinθ)
+        # 4+4 = Vm^2cos^2(θ) + Vm^2sin^2(θ) = Vm^2
+        # Vm = np.sqrt(4+4) = np.abs(V)
     return U.copy(), Ss.copy()
 
 
@@ -174,7 +178,7 @@ def JacobianMatrix3p(Y_admittance, U):
 # ------------------------------------------------------------
 # newtonrapson : orchestrates the iterations
 # ------------------------------------------------------------
-def newtonrapson(bus_typ, Y_system, S_start, U_start):
+def newtonrapson(bus_typ, Y_admittance, S_start, U_start):
     try:
         # s_L given (specified) complex injections
         P_start, Q_start = np.real(S_start), np.imag(S_start)
@@ -183,10 +187,10 @@ def newtonrapson(bus_typ, Y_system, S_start, U_start):
         traj = [U.copy()]                      # to monitor convergence
 
         for it in range(40):
-            J, *_ = JacobianMatrix3p(Y_system, U)
+            J, *_ = JacobianMatrix3p(Y_admittance, U)
 
             # U : updated bus-voltage phasors after one NR correction step
-            U, _  = VoltageCalculation3p(bus_typ, J, Y_system, U,
+            U, _  = VoltageCalculation3p(bus_typ, J, Y_admittance, U,
                                          P_start.copy(), Q_start.copy())
             traj.append(U.copy())
 
@@ -199,7 +203,7 @@ def newtonrapson(bus_typ, Y_system, S_start, U_start):
         else:
             print("did not converge")
 
-        I = Y_system @ U
+        I = Y_admittance @ U
         S = np.diag(U) @ np.conj(I) #complex power injections S = V I^{*}
         return U, I, S
 

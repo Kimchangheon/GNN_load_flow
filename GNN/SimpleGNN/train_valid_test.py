@@ -5,19 +5,43 @@ from GNN.SimpleGNN.Dataset import ChanghunDataset
 from helper import *
 from collate_blockdiag import *
 import os
+import time
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+os.makedirs("./results/ckpt", exist_ok=True)
+os.makedirs("./results/plots", exist_ok=True)
 
 # ------------------------------------------------------------------
 # 0.  Hyper-parameters
 # ------------------------------------------------------------------
-RUNNAME = "BLOCK_20M"
-BLOCK_DIAG =False
-BATCH     =  16
-EPOCHS    = 100
-LR        = 1e-3
-VAL_EVERY = 1        # epochs
-PARQUET   = "212100_variations_4_8_16_32_bus_grid.parquet"
+import argparse
+
+parser = argparse.ArgumentParser(description="Training script with configurable hyperparameters")
+
+parser.add_argument("--PINN", action="store_true", help="Enable Physics-Informed Neural Networks")
+parser.add_argument("--RUNNAME", type=str, default="PINN_BLOCK_cplx_20M", help="Name of the run and output model")
+parser.add_argument("--BLOCK_DIAG", action="store_true", help="Use block diagonal mode")
+parser.add_argument("--ADJ_MODE", type=str, default="cplx", help="Adjacency mode: real | cplx | other")
+parser.add_argument("--BATCH", type=int, default=16, help="Batch size")
+parser.add_argument("--EPOCHS", type=int, default=10, help="Number of training epochs")
+parser.add_argument("--LR", type=float, default=1e-3, help="Learning rate")
+parser.add_argument("--VAL_EVERY", type=int, default=1, help="Validation frequency (in epochs)")
+parser.add_argument("--PARQUET", type=str, default="./data/212100_variations_4_8_16_32_bus_grid.parquet", help="Path to Parquet data file")
+
+args = parser.parse_args()
+
+# Assign to variables if needed
+PINN       = args.PINN
+PINN       = False
+RUNNAME    = args.RUNNAME
+BLOCK_DIAG = args.BLOCK_DIAG
+ADJ_MODE   = args.ADJ_MODE
+BATCH      = args.BATCH
+EPOCHS     = args.EPOCHS
+LR         = args.LR
+VAL_EVERY  = args.VAL_EVERY
+PARQUET    = args.PARQUET
 
 # ------------------------------------------------------------------
 # 1.  Device
@@ -82,85 +106,128 @@ print(f"Dataset sizes  |  train {n_train}   valid {n_val}   test {n_test}")
 # ------------------------------------------------------------------
 # 3.  Model / Optim / Loss
 # ------------------------------------------------------------------
-model  = GNSSolver(d=100, K=10).to(device)
+model  = GNSSolver(pinn_flag=PINN, adj_mode=ADJ_MODE,d=10, K=30).to(device)
 optim  = torch.optim.Adam(model.parameters(), lr=LR)
 loss_f = torch.nn.MSELoss()
 
 # ------------------------------------------------------------------
 # 4.  Helper: one epoch pass (train=False → no grad)
 # ------------------------------------------------------------------
-def run_epoch(loader, train=True):
-    if train:
-        model.train()
-    else:
-        model.eval()
-    total, count = 0.0, 0
+# ------------------------------------------------------
+# helper: one full pass over a loader
+# ------------------------------------------------------
+def run_epoch(loader, *, train: bool, pinn: bool):
+    model.train() if train else model.eval()
+
+    sum_loss = 0.0          # physics   (always)
+    sum_mse  = 0.0          # |V|,δ MSE (only meaningful when pinn=True)
+    n_samples = 0
+
     with torch.set_grad_enabled(train):
         for batch in loader:
+            B = batch["bus_type"].size(0)        # current mini-batch size
+            n_samples += B
+
+            # move to device ------------------------------------------------
             bus_type = batch["bus_type"].to(device)
             Yr       = batch["Ybus_real"].to(device)
             Yi       = batch["Ybus_imag"].to(device)
-            Pstart    = batch["P_start"].to(device)
-            Qstart    = batch["Q_start"].to(device)
-            Vstart    = batch["V_start"].to(device)
+            Pstart   = batch["P_start"].to(device)
+            Qstart   = batch["Q_start"].to(device)
+            Vstart   = batch["V_start"].to(device)
             Vtrue    = batch["V_true"].to(device)
 
-            Vpred = model(bus_type, Yr, Yi, Pstart, Qstart, Vstart)
-            loss  = loss_f(Vpred, Vtrue)
+            # forward -------------------------------------------------------
+            if pinn:
+                Vpred, loss_phys = model(bus_type, Yr, Yi, Pstart, Qstart, Vstart)
+                loss = loss_phys
+                mse  = loss_f(Vpred, Vtrue)          # supervised metric only
+            else:
+                Vpred = model(bus_type, Yr, Yi, Pstart, Qstart, Vstart)
+                loss  = loss_f(Vpred, Vtrue)
+                mse   = loss                          # same number for convenience
 
+            # backward / optim ---------------------------------------------
             if train:
                 optim.zero_grad()
                 loss.backward()
                 optim.step()
 
-            total += loss.item() * bus_type.size(0)
-            count += bus_type.size(0)
-    return total / count
+            # aggregate -----------------------------------------------------
+            sum_loss += loss.item() * B
+            sum_mse  += mse.item()  * B
 
+    mean_loss = sum_loss / n_samples
+    mean_mse  = sum_mse  / n_samples
+    return mean_loss, mean_mse        # always a tuple
 # ------------------------------------------------------------------
 # 5.  Training loop
 # ------------------------------------------------------------------
-train_hist, val_hist = [], []
+train_loss_hist, train_mse_hist = [], []
+val_loss_hist,   val_mse_hist   = [], []
 
-best_val_mse = float('inf')  # Initialize best validation MSE to a very high value
+best_val_loss = float('inf')                 # best physics-loss so far
 
 for epoch in range(1, EPOCHS + 1):
-    train_mse = run_epoch(train_loader, train=True)
-    train_hist.append(train_mse)
+    t0 = time.time()
 
+    # -------- train pass ------------------------------------------------
+    train_loss, train_mse = run_epoch(train_loader, train=True, pinn=PINN)
+    train_loss_hist.append(train_loss)
+    train_mse_hist.append(train_mse)
+
+    # -------- validation ------------------------------------------------
     if epoch % VAL_EVERY == 0 or epoch == EPOCHS:
-        val_mse = run_epoch(val_loader, train=False)
-        val_hist.append(val_mse)
-        print(f"Epoch {epoch:3d} | train MSE {train_mse:.4e} | "
-              f"valid MSE {val_mse:.4e}")
+        val_loss, val_mse = run_epoch(val_loader, train=False, pinn=PINN)
+        val_loss_hist.append(val_loss)
+        val_mse_hist.append(val_mse)
 
-        if val_mse < best_val_mse:
-            best_val_mse = val_mse
-            # Save model checkpoint
-            torch.save(model.state_dict(), RUNNAME+"_"+str(EPOCHS)+"_best_model.ckpt")
-            print("Checkpoint saved.")
+        print(f"Epoch {epoch:3d} | "
+              f"train loss {train_loss:.4e}  mse {train_mse:.4e} | "
+              f"valid loss {val_loss:.4e}  mse {val_mse:.4e} | "
+              f"time {time.time()-t0:.2f}s")
 
+        # -------- checkpointing on *physics* loss -----------------------
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            ckpt_path = f"./results/ckpt/{RUNNAME}_{EPOCHS}_best_model.ckpt"
+            torch.save(model.state_dict(), ckpt_path)
+            print(f"  ↳ checkpoint saved to {ckpt_path}")
     else:
-        print(f"Epoch {epoch:3d} | train MSE {train_mse:.4e}")
+        # validation skipped this epoch
+        print(f"Epoch {epoch:3d} | "
+              f"train loss {train_loss:.4e}  mse {train_mse:.4e} | "
+              f"time {time.time()-t0:.2f}s")
 
+# ------------------------------------------------------------------
+# 6.  Curves
+# ------------------------------------------------------------------
 import matplotlib.pyplot as plt
-epochs = range(1, len(train_hist) + 1)
+epochs = range(1, len(train_loss_hist) + 1)
 
-plt.figure()
-plt.plot(epochs, train_hist, label="Train MSE")
-plt.plot(epochs, val_hist,   label="Valid MSE")
+plt.figure(figsize=(6,4))
+plt.plot(epochs, train_loss_hist, label="Train loss (physics)" if PINN else "Train MSE")
+plt.plot(epochs[:len(val_loss_hist)], val_loss_hist,   label="Valid loss (physics)" if PINN else "Valid MSE")
+if PINN:                 # show supervised metric as well
+    plt.plot(epochs, train_mse_hist, '--', label="Train MSE")
+    plt.plot(epochs[:len(val_mse_hist)], val_mse_hist,  '--', label="Valid MSE")
+
 plt.yscale("log")
 plt.xlabel("Epoch")
-plt.ylabel("Mean-Squared Error")
-plt.title("Training / Validation loss")
+plt.ylabel("Loss")
+plt.title("Training / Validation curves")
 plt.legend()
 plt.tight_layout()
-
-plt.savefig("loss_curve_block_diagonal_batching.png")   # saved next to the script
+plot_path = f"./results/plots/{RUNNAME}.png"
+plt.savefig(plot_path)
 plt.show()
+print(f"Plot saved to {plot_path}")
 
 # ------------------------------------------------------------------
-# 6.  Final test evaluation
+# 7.  Final test evaluation
 # ------------------------------------------------------------------
-test_mse = run_epoch(test_loader, train=False)
-print(f"\nFinal test-set MSE: {test_mse:.4e}")
+test_loss, test_mse = run_epoch(test_loader, train=False, pinn=PINN)
+if PINN:
+    print(f"\nTest physics-loss : {test_loss:.4e} | Test MSE : {test_mse:.4e}")
+else:
+    print(f"\nFinal test-set MSE: {test_loss:.4e}")

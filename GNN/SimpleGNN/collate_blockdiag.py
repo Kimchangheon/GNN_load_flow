@@ -10,8 +10,11 @@ def collate_blockdiag(samples):
     """
     # --- concatenate 1-D fields -----------------------------------------
     bus_type = torch.cat([s["bus_type"] for s in samples], dim=0)      # (ΣN,)
+    P_start   = torch.cat([s["P_start"]   for s in samples], dim=0)
+    Q_start   = torch.cat([s["Q_start"]   for s in samples], dim=0)
     P_spec   = torch.cat([s["P_spec"]   for s in samples], dim=0)
     Q_spec   = torch.cat([s["Q_spec"]   for s in samples], dim=0)
+    V_start   = torch.cat([s["V_start"]   for s in samples], dim=0)      # (ΣN,2)
     V_true   = torch.cat([s["V_true"]   for s in samples], dim=0)      # (ΣN,2)
 
     # --- block-diag 2-D fields -----------------------------------------
@@ -27,8 +30,11 @@ def collate_blockdiag(samples):
         "bus_type":  bus_type.unsqueeze(0),   # (1,M)
         "Ybus_real": Yr.unsqueeze(0),         # (1,M,M)
         "Ybus_imag": Yi.unsqueeze(0),
+        "P_start":   P_start.unsqueeze(0),  # (1,M)
+        "Q_start":   Q_start.unsqueeze(0),
         "P_spec":    P_spec.unsqueeze(0),     # (1,M)
         "Q_spec":    Q_spec.unsqueeze(0),
+        "V_start":   V_start.unsqueeze(0),  # (1,M,2)
         "V_true":    V_true.unsqueeze(0),     # (1,M,2)
         "offsets":   offsets,                 # keep for optional use
         "sizes":     torch.tensor(sizes)

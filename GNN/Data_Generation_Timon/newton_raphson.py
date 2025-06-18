@@ -4,7 +4,7 @@ def VoltageCalculation3p(bus_typ, JMatrix, Y_admittance, U, P, Q):
     N, M = Y_admittance.shape
 
     I = Y_admittance @ U  # Currents
-    Ss = np.diag(U) @ np.conj(I)  # Complex powers
+    Ss = np.diag(U) @ np.conj(I)  # Complex powers # you can just do element-wise multiplication. U is already 1-d why you make it 2-d diagonal matrix..?
 
     PQs = np.concatenate((np.real(Ss), np.imag(Ss)))  # Aufteilung des Vektors auf Wirkleistungen und Blindleistungen
 
