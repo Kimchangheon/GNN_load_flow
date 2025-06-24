@@ -1,6 +1,8 @@
 import torch
 from torch.utils.data import DataLoader, random_split
-from GNN.SimpleGNN.GNS import GNSSolver
+from GNN.SimpleGNN.GNSNode import GNSNode
+from GNN.SimpleGNN.GNSMsg import GNSMsg
+
 from GNN.SimpleGNN.Dataset import ChanghunDataset
 from helper import *
 from collate_blockdiag import *
@@ -33,7 +35,6 @@ args = parser.parse_args()
 
 # Assign to variables if needed
 PINN       = args.PINN
-PINN       = False
 RUNNAME    = args.RUNNAME
 BLOCK_DIAG = args.BLOCK_DIAG
 ADJ_MODE   = args.ADJ_MODE
@@ -106,7 +107,9 @@ print(f"Dataset sizes  |  train {n_train}   valid {n_val}   test {n_test}")
 # ------------------------------------------------------------------
 # 3.  Model / Optim / Loss
 # ------------------------------------------------------------------
-model  = GNSSolver(pinn_flag=PINN, adj_mode=ADJ_MODE,d=10, K=30).to(device)
+# model  = GNSNode(pinn_flag=PINN, adj_mode=ADJ_MODE,d=10, K=30).to(device)
+
+model  = GNSMsg(d=10, K=30, pinn=PINN).to(device)
 optim  = torch.optim.Adam(model.parameters(), lr=LR)
 loss_f = torch.nn.MSELoss()
 

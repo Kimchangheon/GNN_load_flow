@@ -194,7 +194,7 @@ def generate_PQ(bus_typ):
             P[i] = - np.round(np.random.uniform(0, 50, 1)).astype(int)
             Q[i] = - np.round(np.random.uniform(0, 50, 1)).astype(int)
 
-    # Skalieren Sie die Werte auf Millionen (1e6)
+    # Scale the values to millions (1e6)
 
     return P, Q
 
@@ -215,14 +215,14 @@ def generate_u_start_for_buses(bustype):
     return u_start
 
 
-def case_generation(Bus_number, fixed, debugging, pic, U_Grid, S_Base):
+def case_generation(Bus_number, fixed, debugging, pic, U_base, S_Base):
     ######
     if debugging:
         Bus_number = 5
 
 
 
-    Z_Base = U_Grid ** 2 / (S_Base)
+    Z_Base = U_base ** 2 / (S_Base)
     Y_Base = 1 / Z_Base
 
     # Example usage
@@ -311,7 +311,7 @@ def case_generation(Bus_number, fixed, debugging, pic, U_Grid, S_Base):
     else:
         P, Q = generate_PQ(bus_typ)
 
-    P, Q = P * 1e6, Q * 1e6
+    P, Q = P * 1e6, Q * 1e6 #(1 MW = 10⁶ W)
 
     if debugging:
         u_start = np.array([
@@ -324,7 +324,7 @@ def case_generation(Bus_number, fixed, debugging, pic, U_Grid, S_Base):
     else:
         u_start = generate_u_start_for_buses(bus_typ)
 
-    u_start = u_start * U_Grid
+    u_start = u_start * U_base
 
     s_multi = P + 1j * Q
 

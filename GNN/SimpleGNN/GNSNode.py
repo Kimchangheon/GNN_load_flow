@@ -1,3 +1,4 @@
+# No message passing (per-bus only)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,7 +36,7 @@ class Decoder(nn.Module):
         return self.head(H)                   # (N,2)
 
 
-class GNSSolver(nn.Module):
+class GNSNode(nn.Module):
     """
     Graph-Neural Newton solver
     ---------------------------------------------

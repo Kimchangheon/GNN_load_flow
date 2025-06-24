@@ -12,9 +12,9 @@ debugging = False
 pic = False
 U_base = 110e3
 S_base = 100 * 1e6
-runs = 1000
-filename = r'C:\Users\fe38cypi\Downloads\changhun\Changhun_multi.parquet'
-save_steps = 10
+runs = 65536
+filename = f'u_start_repaired_{str(runs)}_variations_4_8_16_32_bus_grid.parquet'
+save_steps = 16
 fixed = True  # Für Changhun
 done = False
 
@@ -48,7 +48,7 @@ def process_run(run_idx, debugging, pic, U_base, S_base, fixed, queue):
             queue.put(df)
             return df
 
-        u_newton, I_newton, S_newton = newtonrapson(bus_typ, Y_matrix, s_multi, u_start)
+        u_newton, I_newton, S_newton = newtonrapson(bus_typ, Y_matrix, s_multi.copy(), u_start.copy())
 
         df = pd.DataFrame({
             'bus_number': [bus_number],

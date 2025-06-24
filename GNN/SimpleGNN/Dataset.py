@@ -65,12 +65,13 @@ class ChanghunDataset(Dataset):
         Yr, Yi = Y.real.astype(np.float32), Y.imag.astype(np.float32)
 
         # ------------- strat P,Q -----------------
-        S_start = _merge_complex(r["S_start_real"], r["S_start_imag"])
+        S_base = 100 * 1e6
+        S_start = _merge_complex(r["S_start_real"], r["S_start_imag"]) / S_base
         P_start = S_start.real.astype(np.float32)
         Q_start = S_start.imag.astype(np.float32)
 
         # ------------- specified P,Q -----------------
-        S_spec = _merge_complex(r["S_newton_real"], r["S_newton_imag"])
+        S_spec = _merge_complex(r["S_newton_real"], r["S_newton_imag"]) / S_base
         P_spec = S_spec.real.astype(np.float32)
         Q_spec = S_spec.imag.astype(np.float32)
 

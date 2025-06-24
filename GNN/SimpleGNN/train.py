@@ -1,5 +1,5 @@
 from torch.utils.data import DataLoader
-from GNN.SimpleGNN.GNS import *
+from GNN.SimpleGNN.GNSNode import *
 from GNN.SimpleGNN.Dataset import *
 
 # Automatically select GPU if available
