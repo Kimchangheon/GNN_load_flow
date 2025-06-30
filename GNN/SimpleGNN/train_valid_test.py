@@ -35,6 +35,7 @@ args = parser.parse_args()
 
 # Assign to variables if needed
 PINN       = args.PINN
+PINN = False
 RUNNAME    = args.RUNNAME
 BLOCK_DIAG = args.BLOCK_DIAG
 ADJ_MODE   = args.ADJ_MODE
@@ -143,10 +144,12 @@ def run_epoch(loader, *, train: bool, pinn: bool):
             # forward -------------------------------------------------------
             if pinn:
                 Vpred, loss_phys = model(bus_type, Yr, Yi, Pstart, Qstart, Vstart)
+                assert isinstance(Vpred, torch.Tensor), "expected tensor from model"
                 loss = loss_phys
                 mse  = loss_f(Vpred, Vtrue)          # supervised metric only
             else:
                 Vpred = model(bus_type, Yr, Yi, Pstart, Qstart, Vstart)
+                assert isinstance(Vpred, torch.Tensor), "expected tensor from model"
                 loss  = loss_f(Vpred, Vtrue)
                 mse   = loss                          # same number for convenience
 

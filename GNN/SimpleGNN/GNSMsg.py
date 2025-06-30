@@ -1,22 +1,40 @@
 import torch, torch.nn as nn
 
+class LearningBlock(nn.Module):  # later change hidden dim to more dims, currently suggested latent=hidden
+    def __init__(self, dim_in, hidden_dim, dim_out):
+        super(LearningBlock, self).__init__()
+        self.linear1 = nn.Linear(dim_in, hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        self.linear4 = nn.Linear(hidden_dim, dim_out)
+        self.lrelu = nn.LeakyReLU()
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.lrelu(x)
+        x = self.linear2(x)
+        x = self.lrelu(x)
+        x = self.linear4(x)
+        return x
+
 class GNSMsg(nn.Module):
     def __init__(self, d: int = 32, K: int = 30, pinn: bool = True):
         super().__init__()
         self.K, self.d, self.pinn = K, d, pinn
-
         # φ :  (m_j ,  G_ij , B_ij)  →  d_msg
         self.edge_mlp = nn.Sequential(
             nn.Linear(d + 2, d),
             nn.ReLU(),
             nn.Linear(d, d)
         )
-
         # K *independent* node-update blocks
         in_dim = 4 + d + d            # [v,θ,ΔP,ΔQ] + m_i + Σφ
-        self.theta_upd = nn.ModuleList([nn.Linear(in_dim, 1) for _ in range(K)])
-        self.v_upd     = nn.ModuleList([nn.Linear(in_dim, 1) for _ in range(K)])
-        self.m_upd     = nn.ModuleList([nn.Linear(in_dim, d) for _ in range(K)])
+        hidden = in_dim
+        # self.theta_upd = nn.ModuleList([nn.Linear(in_dim, 1) for _ in range(K)])
+        # self.v_upd     = nn.ModuleList([nn.Linear(in_dim, 1) for _ in range(K)])
+        # self.m_upd     = nn.ModuleList([nn.Linear(in_dim, d) for _ in range(K)])
+        self.theta_upd = nn.ModuleList([LearningBlock(in_dim, hidden, 1) for _ in range(K)])
+        self.v_upd     = nn.ModuleList([LearningBlock(in_dim, hidden, 1) for _ in range(K)])
+        self.m_upd     = nn.ModuleList([LearningBlock(in_dim, hidden, d) for _ in range(K)])
 
     # ---------- helper --------------------------------------------------
     @staticmethod
@@ -57,8 +75,8 @@ class GNSMsg(nn.Module):
             ΔQ[slack_mask | pv_mask] = 0      # PV & slack ignore ΔQ
 
             # 2) neighbour messages  Σ_j φ(m_j , G_ij , B_ij) : weighted sum over neighbours.
-            m_exp = m.unsqueeze(2).expand(-1, -1, N, -1)   # (B,N,N,d)
-            φ_in  = torch.cat([m_exp, line_feat], dim=-1)  # (B,N,N,d+2)
+            m_expanded = m.unsqueeze(2).expand(-1, -1, N, -1)   # (B,N,N,d)
+            φ_in  = torch.cat([m_expanded, line_feat], dim=-1)  # (B,N,N,d+2)
             φ     = self.edge_mlp(φ_in)                    # (B,N,N,d)
             # M_neigh = torch.matmul(A, φ)                   # (B,N,d)
             M_neigh = torch.einsum('bij,bijd -> bid', A, φ)  # (B,N,d)
@@ -91,4 +109,5 @@ class GNSMsg(nn.Module):
                 phys_loss = phys_loss + (0.96**(self.K-1-k))*step_L
 
 
-        return torch.stack([v, θ], dim=-1), phys_loss if self.pinn else torch.stack([v, θ], dim=-1)    # (B,N,2)
+        output = torch.stack([v, θ], dim=-1)
+        return (output, phys_loss) if self.pinn else output
