@@ -188,11 +188,11 @@ def generate_PQ(bus_typ):
             P[i] = 0
             Q[i] = 0
         elif bus_typ[i] == 2:  # PV
-            P[i] = - np.round(np.random.uniform(0, 50, 1)).astype(int)
+            P[i] = - np.round(np.random.uniform(0, 0.5, 1)).astype(int)
             Q[i] = 0
         elif bus_typ[i] == 3:  # PQ
-            P[i] = - np.round(np.random.uniform(0, 50, 1)).astype(int)
-            Q[i] = - np.round(np.random.uniform(0, 50, 1)).astype(int)
+            P[i] = - np.round(np.random.uniform(0, 0.5, 1)).astype(int)
+            Q[i] = - np.round(np.random.uniform(0, 0.5, 1)).astype(int)
 
     # Scale the values to millions (1e6)
 
@@ -222,7 +222,7 @@ def case_generation(Bus_number, fixed, debugging, pic, U_base, S_Base):
 
 
 
-    Z_Base = U_base ** 2 / (S_Base)
+    Z_Base = U_base ** 2 / (S_Base) # 121
     Y_Base = 1 / Z_Base
 
     # Example usage
@@ -271,14 +271,14 @@ def case_generation(Bus_number, fixed, debugging, pic, U_base, S_Base):
     #print(Conection_matrix)
 
     if debugging:
-        Y_C_Lines = np.array([0.06, 0.05, 0, 0, 0.04, 0.04, 0.03, 0.02, 0, 0.05], dtype=float) / 1 / Z_Base
+        Y_C_Lines = np.array([0.06, 0.05, 0, 0, 0.04, 0.04, 0.03, 0.02, 0, 0.05], dtype=float) / 1 / Z_Base # just /Z_Base
         print("Lines_conected ", Lines_connected)
 
     else:
         if fixed:
             np.random.seed(num_connections)
 
-        Y_C_Lines = np.random.uniform(0.01, 0.10, size=num_connections) / 1 / Z_Base
+        Y_C_Lines = np.random.uniform(0.01, 0.10, size=num_connections) / 1 / Z_Base # just / Z_base
 
     Y_C_Bus = np.sum(insert_values_in_matrix(Conection_matrix, Lines_connected, Y_C_Lines), axis=0)
 
@@ -311,7 +311,7 @@ def case_generation(Bus_number, fixed, debugging, pic, U_base, S_Base):
     else:
         P, Q = generate_PQ(bus_typ)
 
-    P, Q = P * 1e6, Q * 1e6 #(1 MW = 10⁶ W)
+    P, Q = P * S_Base, Q * S_Base #(1 MW = 10⁶ W)
 
     if debugging:
         u_start = np.array([
